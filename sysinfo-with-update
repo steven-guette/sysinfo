@@ -1,0 +1,139 @@
+#!/bin/bash
+
+check_dependencies() {
+    local -A dependencies=([figlet]=figlet [lolcat]=lolcat [gawk]=gawk [grep]=grep [curl]=curl [lsblk]=lsblk [sensors]=lm-sensors)
+    local missing=()
+
+    for command_name in "${!dependencies[@]}"; do
+        if ! command -v "$command_name" &> /dev/null; then
+            missing+=("${dependencies[$command_name]}")
+        fi
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo -e "\n\033[0;31mDes dépendances sont manquantes pour le bon fonctionnement de system-info.\033[0m"
+        read -rp "Voulez-vous les installer ? (oui/non)" dependencies_install
+
+        if [ "${dependencies_install,,}" = 'oui' ]; then
+            if command -v apt-get &> /dev/null; then
+                if sudo -v &> /dev/null; then
+                    sudo apt-get -y -qq install "${missing[@]}"
+                else
+                    echo -e "Vous ne bénéficiez pas des droits administrateur vous permettant d'installer les dépendances manquantes." \
+                            "\nSi vous souhaitez les installer ultérieurement depuis un compte administrateur, voici la liste des paquets : ${missing[*]}"
+                fi
+            else
+                echo -e "Vous utilisez une distribution qui n'est pas basé sur Debian, vous devez installer les dépendances manuellement." \
+                        "\nVoici la liste des paquets manquants : ${missing[*]}"
+            fi
+        else
+            exit 1
+        fi
+    fi
+}
+
+set_temperature_coloration() {
+    temp="${1:1:2}"
+
+    if [ "$temp" -gt 80 ]; then
+        echo "\033[0;31m$1\033[0m"
+    elif [ "$temp" -lt 50 ]; then
+        echo "\033[0;32m$1\033[0m"
+    else
+        echo "\033[0;33m$1\033[0m"
+    fi
+}
+
+check_dependencies
+
+mapfile -t disk_list < <(lsblk -T --output NAME,FSTYPE,LABEL,SIZE,FSAVAIL,MOUNTPOINT | grep -v NAME)
+
+system="$(uname -o) $(uname -v | awk '{print $4}') $(uname -r) $(uname -m)"
+cpu_model="$(grep -m1 -i 'model name' /proc/cpuinfo)"
+cpu_model="${cpu_model#*: }"
+cpu_type="$(echo "${cpu_model,,}" | awk '{print $1}')"
+
+total_memory="$(free -h | grep Mem | awk '{print $2}')"
+used_memory="$(free -h | grep Mem | awk '{print $3}')"
+
+sudo apt-get -y update > /dev/null 2>&1
+update_numbers=$(sudo apt-get -u upgrade --assume-no | grep -oP '\d+(?= mis à jour)')
+if [ -z "$update_numbers" ] || [ "$update_numbers" -eq 0 ]; then
+    update_numbers="\033[0;32m-- Système à jour --\033[0m"
+elif [ "$update_numbers" -eq 1 ]; then
+    update_numbers="\033[0;33mUn paquet en attente de mise à jour.\033[0m"
+else
+    update_numbers="\033[0;33m$update_numbers paquets en attente de mise à jour.\033[0m"
+fi
+
+if [ -f /var/run/reboot-required ]; then
+    reboot_status='\033[0;33mRedémarrage du système nécessaire.\033[0m'
+else
+    reboot_status='\033[0;32m-- Non nécessaire --\033[0m'
+fi
+
+# Nom de l'hôte courant.
+figlet -f standard "${HOSTNAME//-/ }" | lolcat
+
+# Affichage des informations système.
+echo -e "\n\033[0;36m#==========================================================#\033[0m" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mSystème     :\033[0m  $system" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mMise à jour :\033[0m  $update_numbers" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mRedémarrage :\033[0m  $reboot_status" \
+        "\n\033[0;36m#==========================================================#\033[0m"
+
+# Affichage de l'IP externe et locale.
+echo -e "\033[0;36m#\033[0m \033[0;35m\033[1mIP Externe :\033[0m  $(curl -s https://ipinfo.io/ip)" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mIP Locale  :\033[0m  $(hostname -I | awk '{print $1}')" \
+        "\n\033[0;36m#==========================================================#\033[0m"
+
+# Affichage des coeurs du cpu, de leur températures respectives et des indicateurs de seuils.
+echo -e "\033[0;36m#\033[0m \033[0;35m\033[1mCPU :\033[0m  $cpu_model"
+
+if [ "$cpu_type" = 'amd' ]; then
+    temperature=$(set_temperature_coloration "$(sensors | grep -E "Tdie|Tctl" | awk '{print $2}')")
+    echo -e "\033[0;36m#\033[0m \033[0;35m\033[1mTempérature :\033[0m  $temperature"
+else
+    mapfile -t cpu_list < <(sensors | grep Core)
+
+    i=1
+    for cpu in "${cpu_list[@]}"; do
+        temperature="$(echo "$cpu" | awk '{print $3}')"
+        cpu="${cpu/"$temperature"/"$(set_temperature_coloration "$temperature")"}"
+        cpu="${cpu//    / }"
+
+        if [ $i -lt 10 ]; then
+            cpu=${cpu/Core *:/\\033[0;35m\\033[1mCore 0$i :\\033[0m}
+        else
+            cpu=${cpu/Core *:/\\033[0;35m\\033[1mCore $i :\\033[0m}
+        fi
+
+        echo -e "\033[0;36m#\033[0m $cpu"
+        i=$(("$i"+1))
+    done
+fi
+
+# Affichage des informations de la mémoire vive.
+echo -e "\033[0;36m#==========================================================#\033[0m" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mMémoire totale   :\033[0m  ${total_memory/i/o}" \
+        "\n\033[0;36m#\033[0m \033[0;35m\033[1mMémoire utilisée :\033[0m  ${used_memory/i/o}" \
+        "\n\033[0;36m#==========================================================#\033[0m"
+
+# Affichage des partitions de stockage et de leur espace.
+echo -e "\033[0;36m#\033[0m \033[0;34m\033[1mDISQUE TYPE   LABEL      TAILLE  RESTE  LOCALISATION\033[0m"
+
+previous_disk=""
+for disk in "${disk_list[@]}"; do
+    base_disk_name=$(awk '{print $1}' <<< "$disk" | grep -o '^[a-zA-Z0-9]*')
+    current_disk=${base_disk_name:-$current_disk}
+
+    if [ -n "$previous_disk" ] && [ "$previous_disk" != "$current_disk" ]; then
+        echo -e "\033[0;36m#\033[0m"
+    fi
+
+    disk_name="\033[0;35m\033[1m$(awk '{print $1}' <<< "$disk")\033[0m"
+    echo -e "\033[0;36m#\033[0m $disk_name ${disk#* }"
+
+    previous_disk="$current_disk"
+done
+echo -e "\033[0;36m#==========================================================#\033[0m\n"
