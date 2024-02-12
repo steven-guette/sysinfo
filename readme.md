@@ -13,7 +13,6 @@ Vous devez avoir les droits sudo afin d'installer les paquets nécessaires au fo
 Pour la version qui propose l'affichage des mises à jour, il vous faudra l'accès à deux commandes 
 (Si possible en NOPASSWD via l'utilisation de visudo pour le confort d'utilisation) :
 - /usr/bin/apt-get -y update
-- /usr/bin/apt-get -u upgrade --assume-no
 
 ## <span style="color: orange;">Automatiser l'exécution lors de l'ouverture d'un terminal ou une connexion SSH</span>
 
